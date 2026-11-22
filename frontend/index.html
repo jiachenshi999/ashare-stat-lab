@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>A股市场统计认知实验室</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">A</span>
+      <div class="brand-text">
+        <h1>A股市场统计认知实验室</h1>
+        <p class="tagline">用历史分布而不是感觉，认识中国A股</p>
+      </div>
+    </div>
+    <div class="controls">
+      <div class="picker">
+        <button id="picker-btn" class="btn">研究对象：<span id="picker-label">上证指数</span> ▾</button>
+        <div id="picker-panel" class="picker-panel hidden"></div>
+      </div>
+      <label>时间范围
+        <select id="range-select">
+          <option value="all" selected>全部可用历史</option>
+          <option value="1y">近 1 年</option>
+          <option value="3y">近 3 年</option>
+          <option value="5y">近 5 年</option>
+          <option value="10y">近 10 年</option>
+          <option value="custom">自定义区间</option>
+        </select>
+      </label>
+      <span id="custom-range" class="hidden">
+        <input type="date" id="range-start" />
+        <span>—</span>
+        <input type="date" id="range-end" />
+        <button id="apply-range" class="btn">应用</button>
+      </span>
+      <button id="export-csv" class="btn">导出当前数据 CSV</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="sidebar">
+      <div class="nav-group">
+        <button class="nav-item active" data-module="overview">概览与主旨</button>
+        <button class="nav-item" data-module="p01">P0-1 每日涨跌的分布</button>
+        <button class="nav-item" data-module="p02">P0-2 极端事件与尾部</button>
+        <button class="nav-item" data-module="p03">P0-3 牛熊、回撤与等待</button>
+        <button class="nav-item" data-module="p04">P0-4 持有多久可能亏</button>
+      </div>
+      <div class="nav-group story">
+        <div class="story-title">市场认知故事线</div>
+        <button id="story-next" class="btn btn-primary">下一问题 →</button>
+      </div>
+      <div class="nav-group status-box" id="data-status"></div>
+    </nav>
+
+    <main class="content" id="content">
+      <!-- 由 app.js 动态渲染 -->
+    </main>
+  </div>
+
+  <footer class="footer">
+    <span>数据源：新浪财经指数日线（akshare 1.20.65）· 本页面不构成任何投资建议 · 仅供统计认知研究</span>
+  </footer>
+
+  <script src="assets/echarts.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

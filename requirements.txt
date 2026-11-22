@@ -1,0 +1,18 @@
+# A股市场统计认知实验室 —— 依赖说明
+#
+# 本项目【复用】已安装的 AkShare MCP venv 中的依赖，不重复安装。
+# 实际运行解释器：C:\Users\Lenovo\.dsh\mcp-servers\china-stock-mcp\venv\Scripts\python.exe
+#
+# 后端服务（app.py）为纯 Python 标准库，运行不依赖以下任何第三方包。
+# 仅"数据采集 + 统计计算"（update_data.py / backend/*）需要 akshare/pandas/numpy。
+
+# 已确认版本（本机实测，2026-11-22）：
+akshare==1.20.65
+akshare-one==0.6.1
+pandas==3.1.1
+numpy==2.5.5
+
+# 说明：
+# - 不引入 scipy/fastapi/duckdb/pyarrow：统计与后端均已用标准库 + numpy 实现。
+# - 前端图表库 ECharts 已作为本地静态资源打包（frontend/assets/echarts.min.js），
+#   运行时不依赖 CDN。

@@ -1,0 +1,163 @@
+{
+  "sh000001": {
+    "name": "上证指数",
+    "symbol": "sh000001",
+    "market": "上海证券交易所",
+    "key": "sh000001",
+    "source_symbol": "sh000001",
+    "source_interface": "index_zh_daily_sina",
+    "rows": 8768,
+    "first_date": "1990-12-19",
+    "last_date": "2026-11-20",
+    "columns": [
+      "date",
+      "open",
+      "high",
+      "low",
+      "close",
+      "volume",
+      "amount"
+    ],
+    "quality_issues": [],
+    "downloaded_at": "2026-11-22T15:13:54+08:00",
+    "has_stats": true
+  },
+  "sh000300": {
+    "name": "沪深300",
+    "symbol": "sh000300",
+    "market": "中证指数(跨市场)",
+    "key": "sh000300",
+    "source_symbol": "sh000300",
+    "source_interface": "index_zh_daily_sina",
+    "rows": 6035,
+    "first_date": "2002-01-04",
+    "last_date": "2026-11-20",
+    "columns": [
+      "date",
+      "open",
+      "high",
+      "low",
+      "close",
+      "volume",
+      "amount"
+    ],
+    "quality_issues": [],
+    "downloaded_at": "2026-11-22T15:13:55+08:00",
+    "has_stats": true
+  },
+  "sh000016": {
+    "name": "上证50",
+    "symbol": "sh000016",
+    "market": "中证指数(上交所)",
+    "key": "sh000016",
+    "source_symbol": "sh000016",
+    "source_interface": "index_zh_daily_sina",
+    "rows": 5557,
+    "first_date": "2004-01-02",
+    "last_date": "2026-11-20",
+    "columns": [
+      "date",
+      "open",
+      "high",
+      "low",
+      "close",
+      "volume",
+      "amount"
+    ],
+    "quality_issues": [],
+    "downloaded_at": "2026-11-22T15:13:56+08:00",
+    "has_stats": true
+  },
+  "sz399001": {
+    "name": "深证成指",
+    "symbol": "sz399001",
+    "market": "深圳证券交易所",
+    "key": "sz399001",
+    "source_symbol": "sz399001",
+    "source_interface": "index_zh_daily_sina",
+    "rows": 8676,
+    "first_date": "1991-04-03",
+    "last_date": "2026-11-20",
+    "columns": [
+      "date",
+      "open",
+      "high",
+      "low",
+      "close",
+      "volume",
+      "amount"
+    ],
+    "quality_issues": [],
+    "downloaded_at": "2026-11-22T15:13:57+08:00",
+    "has_stats": true
+  },
+  "sh000905": {
+    "name": "中证500",
+    "symbol": "sh000905",
+    "market": "中证指数(跨市场)",
+    "key": "sh000905",
+    "source_symbol": "sh000905",
+    "source_interface": "index_zh_daily_sina",
+    "rows": 5314,
+    "first_date": "2005-01-04",
+    "last_date": "2026-11-20",
+    "columns": [
+      "date",
+      "open",
+      "high",
+      "low",
+      "close",
+      "volume",
+      "amount"
+    ],
+    "quality_issues": [],
+    "downloaded_at": "2026-11-22T15:13:58+08:00",
+    "has_stats": true
+  },
+  "sh000852": {
+    "name": "中证1000",
+    "symbol": "sh000852",
+    "market": "中证指数(跨市场)",
+    "key": "sh000852",
+    "source_symbol": "sh000852",
+    "source_interface": "index_zh_daily_sina",
+    "rows": 2941,
+    "first_date": "2014-10-17",
+    "last_date": "2026-11-20",
+    "columns": [
+      "date",
+      "open",
+      "high",
+      "low",
+      "close",
+      "volume",
+      "amount"
+    ],
+    "quality_issues": [],
+    "downloaded_at": "2026-11-22T15:13:58+08:00",
+    "has_stats": true
+  },
+  "sz399006": {
+    "name": "创业板指",
+    "symbol": "sz399006",
+    "market": "深圳证券交易所",
+    "key": "sz399006",
+    "source_symbol": "sz399006",
+    "source_interface": "index_zh_daily_sina",
+    "rows": 4000,
+    "first_date": "2010-06-01",
+    "last_date": "2026-11-20",
+    "columns": [
+      "date",
+      "open",
+      "high",
+      "low",
+      "close",
+      "volume",
+      "amount"
+    ],
+    "quality_issues": [],
+    "downloaded_at": "2026-11-22T15:13:59+08:00",
+    "has_stats": true
+  }
+}

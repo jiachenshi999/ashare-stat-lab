@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+
+# 本地日志
+logs/
+*.log
+
+# 部署与临时产物
+_site/
+site/
+.dsh-*
+
+# 系统
+Thumbs.db
+.DS_Store
