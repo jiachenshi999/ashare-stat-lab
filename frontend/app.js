@@ -21,6 +21,10 @@ let holdingHorizon = 250;   // P0-4 当前持有期
 let logScale = false;       // P0-3 对数轴
 let selectedDate = null;    // 被点选定位的历史交易日
 let EVENTS = null;          // 历史事件库（极端日原因）
+let MARKET = null;          // P1 最新截面（广度+规模）
+let LIQUIDITY = null;       // P1-7 指数成交额历史
+let VALUATION = null;       // P2-8 指数 PE 历史
+let INDUSTRY = null;        // P2-9 申万行业
 
 const PALETTE = ["#2563eb", "#d64541", "#1a9e6c", "#7c3aed", "#b45309", "#0891b2", "#be185d", "#4d7c0f"];
 const charts = {};
@@ -257,6 +261,7 @@ async function init() {
     populateIndexSelect();
     applyHash();
     await loadEvents();
+    await loadStage23();
     await ensureLoaded(selectedKeys);
     currentData = dataMap[selectedKeys[0]];
     currentKey = selectedKeys[0];
@@ -370,6 +375,31 @@ function causesFor(dateStr) {
   }).filter(o => o.gap <= 10).sort((a, b) => a.gap - b.gap);
   return hits.slice(0, 3).map(o => o.e);
 }
+async function loadStage23() {
+  const files = [
+    ["MARKET", "data/market_snapshot.json"],
+    ["LIQUIDITY", "data/liquidity.json"],
+    ["VALUATION", "data/valuation.json"],
+  ];
+  for (const [name, url] of files) {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) continue;
+      const j = await r.json();
+      if (name === "MARKET") MARKET = j;
+      else if (name === "LIQUIDITY") LIQUIDITY = j;
+      else if (name === "VALUATION") VALUATION = j;
+    } catch (e) { /* 单文件失败不影响其他 */ }
+  }
+}
+async function ensureIndustry(moduleName) {
+  if (INDUSTRY) return;
+  try {
+    const r = await fetch("data/industry.json");
+    if (r.ok) INDUSTRY = await r.json();
+  } catch (e) { /* ignore */ }
+  if (activeModule === moduleName) renderAll();
+}
 
 // ---------------- 渲染入口 ----------------
 let activeModule = "overview";
@@ -381,6 +411,9 @@ function renderAll() {
     else if (activeModule === "p02") renderP02();
     else if (activeModule === "p03") renderP03();
     else if (activeModule === "p04") renderP04();
+    else if (activeModule === "p1breadth") renderP1Breadth();
+    else if (activeModule === "p1liquid") renderP1Liquid();
+    else if (activeModule === "p2value") renderP2Value();
   } catch (e) {
     $("#content").innerHTML = `<div class="card"><b>渲染错误</b><pre>${escapeHtml(e.stack || e.message)}</pre></div>`;
   }
@@ -397,7 +430,7 @@ function applyModule(m) {
 }
 function applyHash() {
   const h = (location.hash || "").replace("#", "");
-  if (["overview", "p01", "p02", "p03", "p04"].includes(h)) {
+  if (["overview", "p01", "p02", "p03", "p04", "p1breadth", "p1liquid", "p2value"].includes(h)) {
     activeModule = h;
     $$(".nav-item").forEach(b => b.classList.toggle("active", b.dataset.module === h));
   }
@@ -1238,6 +1271,297 @@ function holdingTable(hData) {
 }
 
 // ---------------- 数据状态 / 致命错误 ----------------
+// ---------------- P1 市场广度与规模 ----------------
+function renderP1Breadth() {
+  const c = $("#content");
+  if (!MARKET) {
+    c.innerHTML = `<div class="section-title">P1-5/6 市场广度与规模结构</div><div class="card"><b>数据尚未生成</b><p>请运行 <code>python backend/stage23.py</code>（或 update_data.bat）后刷新。</p></div>`;
+    return;
+  }
+  const m = MARKET, a = m.all;
+  const upRatio = a.count ? a.up / a.count * 100 : 0;
+  const top = m.concentration.top_share;
+  const boardRows = m.boards.map(b => `<tr><td>${b.name}</td><td>${b.count}</td><td class="up">${b.up}</td><td class="down">${b.down}</td><td>${fmt(b.median_ret)}%</td><td>${fmt(b.total_cap_yi / 10000, 2)} 万亿</td></tr>`).join("");
+  const capRows = m.cap_buckets.map(b => `<tr><td>${b.label}</td><td>${b.count}</td><td>${fmt(b.cap_yi / 10000, 2)} 万亿</td></tr>`).join("");
+  const topRows = m.top_companies.map((t, i) => `<tr><td>${i + 1}</td><td>${t.name}</td><td>${fmt(t.cap_yi, 1)} 亿</td><td class="${t.zdf >= 0 ? "up" : "down"}">${fmt(t.zdf)}%</td></tr>`).join("");
+  c.innerHTML = `
+    <div class="section-title">P1-5/6 市场广度与规模结构（仅最新截面）</div>
+    <div class="module-intro">研究问题：指数上涨时有多少股票实际下跌？大公司占多少市值？<b>数据边界</b>：本模块为<b>${m.as_of}</b> 的最新截面（${m.source}），<b>不是历史序列</b>；历史逐日广度需按日归档，本页不提供历史广度推断。</div>
+    <div class="kpi-row">
+      ${kpi("有效股票数", a.count, "只", `总市值 ${fmt(m.concentration.total_cap_yi / 10000, 1)} 万亿`)}
+      ${kpi("上涨 / 下跌家数", `${a.up} / ${a.down}`, "", `平盘 ${a.flat}；涨跌幅中位 ${fmt(a.median_ret)}%`)}
+      ${kpi("上涨家数占比", fmt(upRatio) + "%", upRatio >= 50 ? "up" : "down", "当日截面")}
+      ${kpi("Top100 市值占比", fmt(top["100"] * 100) + "%", "", `Top10 ${fmt(top["10"] * 100)}%；Gini ${fmt(m.concentration.gini)}`)}
+    </div>
+    <div class="card"><h3>当日涨跌幅分布（家数）</h3><div class="sub">横轴区间；柱高为股票家数</div><div id="p1-hist" class="chart tall"></div></div>
+    <div class="grid cols-2" style="margin-top:14px">
+      <div class="card"><h3>各板块涨跌家数</h3><div id="p1-boards" class="chart"></div>
+        <table style="margin-top:8px"><thead><tr><th>板块</th><th>家数</th><th>涨</th><th>跌</th><th>中位</th><th>总市值</th></tr></thead><tbody>${boardRows}</tbody></table>
+      </div>
+      <div class="card"><h3>市值分布（家数）</h3><div id="p1-cap" class="chart"></div>
+        <table style="margin-top:8px"><thead><tr><th>市值区间</th><th>家数</th><th>合计市值</th></tr></thead><tbody>${capRows}</tbody></table>
+      </div>
+    </div>
+    <div class="grid cols-2" style="margin-top:14px">
+      <div class="card"><h3>洛伦兹曲线（市值集中度）</h3><div class="sub">对角线=完全平均；越弯说明越集中</div><div id="p1-lorenz" class="chart"></div></div>
+      <div class="card"><h3>市值最大的 20 家公司</h3><div id="p1-top"><table><thead><tr><th>#</th><th>公司</th><th>总市值</th><th>涨跌</th></tr></thead><tbody>${topRows}</tbody></table></div></div>
+    </div>
+    <div class="card" style="margin-top:14px"><h3>当前 PE / PB 中位数</h3>
+      <div>PE_TTM 中位数 <b>${fmt(m.pe_pb_median.pe_ttm_median)}</b>（样本 ${m.pe_pb_median.pe_sample}）；PB 中位数 <b>${fmt(m.pe_pb_median.pb_median)}</b>（样本 ${m.pe_pb_median.pb_sample}）。中位数只描述当前截面，不是历史估值分位。</div>
+      <div class="note misread"><b>容易误读：</b>${m.note}</div>
+    </div>`;
+  drawP1Hist(m);
+  drawP1Boards(m);
+  drawP1Cap(m);
+  drawP1Lorenz(m);
+}
+function drawP1Hist(m) {
+  const c = getChart("p1-hist");
+  const bins = m.hist.bins, counts = m.hist.counts;
+  const cats = bins.slice(0, -1).map((b, i) => `${b}~${bins[i + 1]}`);
+  c.setOption({
+    tooltip: { trigger: "axis" },
+    grid: baseGrid(),
+    xAxis: { type: "category", data: cats, axisLabel: { rotate: 30, fontSize: 10 } },
+    yAxis: { type: "value", name: "家数" },
+    series: [{ type: "bar", data: counts.map((v, i) => ({ value: v, itemStyle: { color: parseFloat(cats[i]) >= 0 ? UP : DOWN } })) }]
+  }, true);
+}
+function drawP1Boards(m) {
+  const c = getChart("p1-boards");
+  // 截断负值区间显示（hist 的最后一个区间是 7~11）
+  c.setOption({
+    tooltip: { trigger: "axis" },
+    grid: baseGrid(), legend: { top: 0 },
+    xAxis: { type: "category", data: m.boards.map(b => b.name) },
+    yAxis: { type: "value", name: "家数" },
+    series: [
+      { type: "bar", name: "上涨", data: m.boards.map(b => b.up), itemStyle: { color: UP } },
+      { type: "bar", name: "下跌", data: m.boards.map(b => b.down), itemStyle: { color: DOWN } }
+    ]
+  }, true);
+}
+function drawP1Cap(m) {
+  const c = getChart("p1-cap");
+  c.setOption({
+    tooltip: { trigger: "axis" },
+    grid: baseGrid(),
+    xAxis: { type: "category", data: m.cap_buckets.map(b => b.label), axisLabel: { rotate: 20, fontSize: 10 } },
+    yAxis: { type: "value", name: "家数" },
+    series: [{ type: "bar", data: m.cap_buckets.map(b => b.count), itemStyle: { color: "#6366f1" } }]
+  }, true);
+}
+function drawP1Lorenz(m) {
+  const c = getChart("p1-lorenz");
+  const lor = m.concentration.lorenz;
+  c.setOption({
+    tooltip: { trigger: "axis", formatter: (p) => `累计${fmt(p[0].value[0] * 100, 1)}%的股票<br/>拥有 ${fmt(p[0].value[1] * 100, 1)}% 的市值` },
+    grid: baseGrid(),
+    xAxis: { type: "value", name: "股票数累计占比", max: 1, axisLabel: { formatter: v => (v * 100) + "%" } },
+    yAxis: { type: "value", name: "市值累计占比", max: 1, axisLabel: { formatter: v => (v * 100) + "%" } },
+    series: [
+      { type: "line", name: "洛伦兹曲线", data: lor, showSymbol: false, lineStyle: { width: 2, color: "#2563eb" } },
+      { type: "line", name: "完全平均", data: [[0, 0], [1, 1]], showSymbol: false, lineStyle: { type: "dashed", color: "#94a3b8" } }
+    ]
+  }, true);
+}
+
+// ---------------- P1-7 成交与流动性 ----------------
+function renderP1Liquid() {
+  const c = $("#content");
+  if (!LIQUIDITY || !LIQUIDITY.indices || !LIQUIDITY.indices.length) {
+    c.innerHTML = `<div class="section-title">P1-7 成交与流动性</div><div class="card"><b>数据尚未生成</b><p>请运行 <code>python backend/stage23.py</code>。</p></div>`;
+    return;
+  }
+  const idx = LIQUIDITY.indices;
+  const primary = idx[0];
+  const last = lastNonNull(primary.amount_yi);
+  const sorted = primary.amount_yi.filter(x => x !== null).sort((a, b) => a - b);
+  const pct = last !== null ? mean(sorted.map(x => x <= last ? 1 : 0)) * 100 : NaN;
+  const med252 = medianOf(primary.amount_yi.slice(-252));
+  c.innerHTML = `
+    <div class="section-title">P1-7 流动性、成交额与市场热度</div>
+    <div class="module-intro">研究问题：今天的成交额到底算大还是小？放量是否意味着更高波动？<b>口径</b>：${LIQUIDITY.note}</div>
+    <div class="kpi-row">
+      ${kpi(`${primary.name}最新成交额`, fmt(last / 10000, 2) + " 万亿", "", "亿元口径换算")}
+      ${kpi("该序列历史百分位", fmt(pct) + "%", pct >= 80 ? "up" : "", "同日成交额的历史分位")}
+      ${kpi("近252日中位数", fmt(med252 / 10000, 2) + " 万亿", "", "与最新值比较")}
+      ${kpi("最新/中位数比值", med252 ? fmt(last / med252) + "x" : "—", "", ">1 表示高于近一年中位数")}
+    </div>
+    <div class="card"><h3>指数成交额历史（亿元）</h3><div id="p1-amt" class="chart tall"></div></div>
+    <div class="card" style="margin-top:14px"><h3>成交额历史分位（全部 & 近252日滚动）</h3><div id="p1-amtpct" class="chart"></div></div>
+    <div class="note misread" style="margin-top:14px"><b>容易误读：</b>指数成分股成交额 ≠ 沪深全市场成交额；市值扩张会使不同年份的绝对成交额不可比。本页不推断成交额能预测收益。</div>`;
+  drawAmount(idx);
+  drawAmountPct(primary);
+}
+function lastNonNull(arr) { for (let i = arr.length - 1; i >= 0; i--) if (arr[i] !== null && arr[i] !== undefined) return arr[i]; return null; }
+function medianOf(arr) {
+  const v = arr.filter(x => x !== null && x !== undefined);
+  if (!v.length) return null;
+  const s = v.slice().sort((a, b) => a - b);
+  return quantile(s, 50);
+}
+function drawAmount(indices) {
+  const c = getChart("p1-amt");
+  const series = indices.map((it, i) => ({
+    type: "line", name: it.name, data: it.dates.map((d, j) => [d, it.amount_yi[j]]),
+    showSymbol: false, lineStyle: { width: 1.2, color: PALETTE[i % PALETTE.length] }
+  }));
+  c.setOption({
+    tooltip: { trigger: "axis", formatter: (p) => `${p[0].value[0]}<br/>成交额 ${fmt(p[0].value[1], 1)} 亿元` },
+    grid: baseGrid(), legend: { top: 0, type: "scroll" },
+    xAxis: { type: "time" }, yAxis: { type: "value", name: "成交额（亿元）" },
+    dataZoom: [{ type: "inside" }, { type: "slider", height: 16, bottom: 6 }],
+    series
+  }, true);
+}
+function drawAmountPct(it) {
+  const c = getChart("p1-amtpct");
+  const vals = it.amount_yi;
+  const pctAll = [], pct252 = [];
+  const sortedAll = vals.filter(x => x !== null).slice().sort((a, b) => a - b);
+  // 滚动252日分位
+  for (let i = 0; i < vals.length; i++) {
+    if (vals[i] === null) { pctAll.push([it.dates[i], null]); pct252.push([it.dates[i], null]); continue; }
+    pctAll.push([it.dates[i], mean(sortedAll.map(x => x <= vals[i] ? 1 : 0)) * 100]);
+    const w = vals.slice(Math.max(0, i - 251), i + 1).filter(x => x !== null).sort((a, b) => a - b);
+    pct252.push([it.dates[i], w.length ? mean(w.map(x => x <= vals[i] ? 1 : 0)) * 100 : null]);
+  }
+  c.setOption({
+    tooltip: { trigger: "axis" },
+    grid: baseGrid(), legend: { top: 0 },
+    xAxis: { type: "time" }, yAxis: { type: "value", name: "分位 (%)", min: 0, max: 100 },
+    dataZoom: [{ type: "inside" }],
+    series: [
+      { type: "line", name: "全历史分位", data: pctAll, showSymbol: false, lineStyle: { width: 1.2, color: "#0f766e" } },
+      { type: "line", name: "滚动252日分位", data: pct252, showSymbol: false, lineStyle: { width: 1.2, color: "#b45309" } }
+    ]
+  }, true);
+}
+
+// ---------------- P2 估值与行业 ----------------
+function renderP2Value() {
+  const c = $("#content");
+  if (!VALUATION && !INDUSTRY) {
+    c.innerHTML = `<div class="section-title">P2-8/9 估值与行业</div><div class="card"><b>正在加载或数据尚未生成</b><p>请稍候；若长时间空白，运行 <code>python backend/stage23.py</code> 后刷新。</p></div>`;
+    ensureIndustry("p2value");
+    return;
+  }
+  if (!INDUSTRY) ensureIndustry("p2value");
+  c.innerHTML = `
+    <div class="section-title">P2-8/9 估值、行业轮动与风格</div>
+    <div class="module-intro">研究问题：市场/行业现在估值处于什么历史位置？价格来自盈利还是估值？哪些行业何时强弱？<b>口径</b>：${VALUATION ? VALUATION.note : ""}</div>
+    <div class="card"><h3>指数滚动市盈率 PE_TTM 历史</h3><div class="sub">仅使用截至该日的已知数据；分位按全历史</div><div id="p2-pe" class="chart tall"></div></div>
+    <div class="grid cols-2" style="margin-top:14px">
+      <div class="card"><h3>申万一级行业当前 PE_TTM</h3><div class="sub">按 PE 从低到高排序；仅最新截面</div><div id="p2-indpe" class="chart tall"></div></div>
+      <div class="card"><h3>申万一级行业当前 PB / 股息率</h3><div id="p2-indpb" class="chart tall"></div></div>
+    </div>
+    <div class="card" style="margin-top:14px"><h3>行业年度收益热力图</h3><div class="sub">每个行业每年的价格收益（%）</div><div id="p2-indyear" class="chart tall"></div></div>
+    <div class="card" style="margin-top:14px"><h3>行业近 1 年累计收益排名</h3><div id="p2-indret" class="chart tall"></div></div>
+    <div class="note misread" style="margin-top:14px"><b>边界：</b>指数 PE 为样本口径、滚动市盈率；行业分类以申万为准；未把个股最新 PE 拼成“历史主板 PE”。</div>`;
+  drawPE();
+  drawIndPE();
+  drawIndPB();
+  drawIndYear();
+  drawIndRet();
+}
+function drawPE() {
+  if (!VALUATION) return;
+  const c = getChart("p2-pe");
+  const series = VALUATION.indices.map((it, i) => ({
+    type: "line", name: it.name, data: it.dates.map((d, j) => [d, it.pe_ttm[j]]),
+    showSymbol: false, lineStyle: { width: 1.2, color: PALETTE[i % PALETTE.length] }
+  }));
+  c.setOption({
+    tooltip: { trigger: "axis", formatter: (p) => `${p[0].value[0]}<br/>PE ${fmt(p[0].value[1])}` },
+    grid: baseGrid(), legend: { top: 0, type: "scroll" },
+    xAxis: { type: "time" }, yAxis: { type: "value", name: "PE_TTM", scale: true },
+    dataZoom: [{ type: "inside" }, { type: "slider", height: 16, bottom: 6 }],
+    series
+  }, true);
+}
+function drawIndPE() {
+  if (!INDUSTRY) return;
+  const c = getChart("p2-indpe");
+  const list = INDUSTRY.industries.filter(x => isFinite(x.pe_ttm) && x.pe_ttm > 0)
+    .sort((a, b) => a.pe_ttm - b.pe_ttm);
+  c.setOption({
+    tooltip: { trigger: "axis" },
+    grid: { left: 90, right: 24, top: 16, bottom: 40 },
+    xAxis: { type: "value", name: "PE_TTM" },
+    yAxis: { type: "category", data: list.map(x => x.name), axisLabel: { fontSize: 10 } },
+    series: [{ type: "bar", data: list.map(x => ({ value: x.pe_ttm, itemStyle: { color: "#6366f1" } })) }]
+  }, true);
+}
+function drawIndPB() {
+  if (!INDUSTRY) return;
+  const c = getChart("p2-indpb");
+  const list = INDUSTRY.industries.filter(x => isFinite(x.pb) && x.pb > 0).sort((a, b) => a.pb - b.pb);
+  c.setOption({
+    tooltip: { trigger: "axis" },
+    grid: { left: 90, right: 24, top: 16, bottom: 40 },
+    xAxis: { type: "value", name: "PB" },
+    yAxis: { type: "category", data: list.map(x => x.name), axisLabel: { fontSize: 10 } },
+    series: [{ type: "bar", data: list.map(x => ({ value: x.pb, itemStyle: { color: "#0891b2" } })) }]
+  }, true);
+}
+function industryYearly(close, dates) {
+  // 返回 [{year, ret}]，按自然年首末收盘
+  const map = {};
+  for (let i = 0; i < dates.length; i++) {
+    const y = dates[i].slice(0, 4);
+    if (!map[y]) map[y] = { first: close[i], last: close[i] };
+    else map[y].last = close[i];
+  }
+  return Object.keys(map).sort().map(y => ({ year: y, ret: (map[y].last / map[y].first - 1) * 100 }));
+}
+function drawIndYear() {
+  if (!INDUSTRY) return;
+  const c = getChart("p2-indyear");
+  const inds = INDUSTRY.industries.filter(x => x.dates.length > 30);
+  const years = [...new Set(inds.flatMap(x => industryYearly(x.close, x.dates).map(y => y.year)))].sort().slice(-12);
+  const data = [];
+  let vmax = 0;
+  inds.forEach((it, yi) => {
+    const ym = {};
+    industryYearly(it.close, it.dates).forEach(o => { ym[o.year] = o.ret; });
+    years.forEach((y, xi) => {
+      if (ym[y] !== undefined) { data.push([xi, yi, ym[y]]); vmax = Math.max(vmax, Math.abs(ym[y])); }
+    });
+  });
+  c.setOption({
+    tooltip: { formatter: (p) => `${inds[p.value[1]].name} ${years[p.value[0]]}<br/>收益 ${fmt(p.value[2], 1)}%` },
+    grid: { left: 90, right: 24, top: 16, bottom: 40 },
+    xAxis: { type: "category", data: years, axisLabel: { fontSize: 10 } },
+    yAxis: { type: "category", data: inds.map(x => x.name), axisLabel: { fontSize: 10 } },
+    visualMap: { min: -vmax, max: vmax, calculable: true, orient: "horizontal", left: "center", bottom: 0, inRange: { color: ["#1a9e6c", "#ffffff", "#d64541"] }, textStyle: { fontSize: 10 } },
+    dataZoom: [{ type: "inside", yAxisIndex: 0 }],
+    series: [{ type: "heatmap", data, label: { show: false }, emphasis: { itemStyle: { shadowBlur: 6 } } }]
+  }, true);
+}
+function drawIndRet() {
+  if (!INDUSTRY) return;
+  const c = getChart("p2-indret");
+  const rows = [];
+  INDUSTRY.industries.forEach(it => {
+    if (!it.dates.length) return;
+    // 近1年：取最后一年交易日
+    const n = it.dates.length;
+    const span = Math.min(250, n - 1);
+    if (span <= 5) return;
+    const ret = (it.close[n - 1] / it.close[n - 1 - span] - 1) * 100;
+    rows.push({ name: it.name, ret });
+  });
+  rows.sort((a, b) => a.ret - b.ret);
+  c.setOption({
+    tooltip: { trigger: "axis" },
+    grid: { left: 90, right: 24, top: 16, bottom: 40 },
+    xAxis: { type: "value", name: "近1年收益 (%)" },
+    yAxis: { type: "category", data: rows.map(r => r.name), axisLabel: { fontSize: 10 } },
+    series: [{ type: "bar", data: rows.map(r => ({ value: r.ret, itemStyle: { color: r.ret >= 0 ? UP : DOWN } })) }]
+  }, true);
+}
+
 function renderStatus() {
   const d = currentData;
   const el = $("#data-status");
@@ -1277,7 +1601,7 @@ function bindGlobal() {
   $$(".nav-item").forEach(b => b.onclick = () => switchModule(b.dataset.module));
   window.addEventListener("hashchange", () => applyModule((location.hash || "").replace("#", "") || "overview"));
   $("#story-next").onclick = () => {
-    const order = ["overview", "p01", "p02", "p03", "p04"];
+    const order = ["overview", "p01", "p02", "p03", "p04", "p1breadth", "p1liquid", "p2value"];
     const i = order.indexOf(activeModule);
     switchModule(order[(i + 1) % order.length]);
   };

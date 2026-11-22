@@ -35,6 +35,21 @@ _SOURCE_MAP = {
         "volume": "volume",
         "amount": "amount",
     },
+    # 中证指数公司官方源（中文列名）；成交金额单位为「亿元」
+    "index_hist_csindex": {
+        "date": "日期",
+        "open": "开盘",
+        "high": "最高",
+        "low": "最低",
+        "close": "收盘",
+        "volume": "成交量",
+        "amount": "成交金额",
+    },
+}
+
+# 各源 amount 列到「元」的换算系数（未列出的视为已是元）
+_AMOUNT_SCALE = {
+    "index_hist_csindex": 1e8,  # 亿元 -> 元
 }
 
 
@@ -63,11 +78,19 @@ def normalize_index(df: pd.DataFrame, source: str) -> pd.DataFrame:
     for col in ["open", "high", "low", "close", "volume", "amount"]:
         out[col] = pd.to_numeric(out[col], errors="coerce")
 
+    # 成交额单位换算到「元」
+    scale = _AMOUNT_SCALE.get(source)
+    if scale and scale != 1:
+        out["amount"] = out["amount"] * scale
+
     # 日期标准化并升序
     out["date"] = pd.to_datetime(out["date"], errors="coerce")
     out = out.dropna(subset=["date"])
     out["date"] = out["date"].dt.strftime("%Y-%m-%d")
     out = out.sort_values("date").reset_index(drop=True)
+
+    # 过滤明显非法行（收盘<=0 或缺失）。真实的极端涨跌值不会被过滤。
+    out = out[out["close"].notna() & (out["close"] > 0)].reset_index(drop=True)
 
     return out
 

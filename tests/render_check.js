@@ -23,6 +23,10 @@ const sandbox = {
   console, setTimeout, clearTimeout, Math, JSON, Date, Object, Array, String, Number, isFinite, parseInt, parseFloat,
   __DATA__: JSON.parse(fs.readFileSync(ROOT + "\\data\\processed\\stats\\sh000001.json", "utf8")),
   __DATA2__: JSON.parse(fs.readFileSync(ROOT + "\\data\\processed\\stats\\sh000300.json", "utf8")),
+  __MARKET__: JSON.parse(fs.readFileSync(ROOT + "\\frontend\\data\\market_snapshot.json", "utf8")),
+  __LIQ__: JSON.parse(fs.readFileSync(ROOT + "\\frontend\\data\\liquidity.json", "utf8")),
+  __VAL__: JSON.parse(fs.readFileSync(ROOT + "\\frontend\\data\\valuation.json", "utf8")),
+  __IND__: JSON.parse(fs.readFileSync(ROOT + "\\frontend\\data\\industry.json", "utf8")),
   __CONTENT__: contentEl,
   __RESULT__: "",
 };
@@ -30,16 +34,17 @@ vm.createContext(sandbox);
 const driver = [
   'INDICES = { sh000001: {name:"上证指数", market:"SSE", has_stats:true}, sh000300: {name:"沪深300", market:"CSI", has_stats:true} };',
   'EVENTS = [{date:"2007-05-30", title:"印花税上调", cause:"测试原因"}];',
+  'MARKET = __MARKET__; LIQUIDITY = __LIQ__; VALUATION = __VAL__; INDUSTRY = __IND__;',
   'let results = [];',
   'function run(label, keys) {',
   '  selectedKeys = keys; dataMap["sh000001"] = __DATA__; dataMap["sh000300"] = __DATA2__;',
   '  currentData = dataMap[keys[0]]; currentKey = keys[0]; range = "all";',
-  '  for (const m of ["overview","p01","p02","p03","p04"]) {',
+  '  for (const m of ["overview","p01","p02","p03","p04","p1breadth","p1liquid","p2value"]) {',
   '    activeModule = m;',
   '    try { renderAll(); const h = __CONTENT__.innerHTML;',
   '      const leak = h.indexOf("$" + "{") >= 0;',
   '      const rerr = h.indexOf("渲染错误") >= 0;',
-  '      const brief = rerr ? " | " + h.replace(/\\s+/g, " ").slice(0, 220) : "";',
+  '      const brief = rerr ? " | " + h.replace(/\\s+/g, " ").slice(0, 200) : "";',
   '      results.push(label + "/" + m + ": " + (rerr ? "RENDER_ERR" : leak ? "LEAK" : "ok") + " (len " + h.length + ")" + brief);',
   '    } catch (e) { results.push(label + "/" + m + ": ERR(" + e.message + ")"); }',
   '  }',
@@ -50,5 +55,5 @@ const driver = [
 ].join("\n");
 vm.runInContext(code + "\n" + driver, sandbox);
 console.log(sandbox.__RESULT__);
-const fails = String(sandbox.__RESULT__).split("\n").filter(s => s.includes("LEAK") || s.includes("ERR"));
+const fails = String(sandbox.__RESULT__).split("\n").filter(s => s.includes("LEAK") || s.includes("ERR") || s.includes("RENDER_ERR"));
 process.exit(fails.length ? 1 : 0);

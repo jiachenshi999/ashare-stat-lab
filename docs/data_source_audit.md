@@ -79,3 +79,17 @@
 - `stock_zh_a_hist` → `stock_zh_a_hist_em`（个股历史；本项目的指数数据不受此影响）。
 - 指数历史正式接口以本机实测为准：`index_zh_daily_sina`（新浪）、`index_zh_daily_tx`（腾讯，前复权）、`index_zh_daily_em`/`index_zh_hist_em`（东方财富，可能限频）。
 - 所有函数名均通过 `dir(akshare)` 与 `inspect.signature` 在本机实测，未盲用旧教程。
+
+## 6. V1.2 新增数据源（多来源与阶段2/3）
+
+| 用途 | 接口 | 来源 | 实测 |
+|------|------|------|------|
+| 指数历史（官方备源） | `index_hist_csindex` | 中证指数公司 | OK，覆盖 000001/000300/000016/000905/000852，含成交额与滚动 PE |
+| A股快照（广度/规模） | `stock_zh_a_spot_tx` | 腾讯 | OK，5580 只，含总市值/流通市值/PE_TTM/PB/换手率 |
+| A股快照（交叉校验） | `stock_zh_a_spot_sina` | 新浪 | OK，5579 只，涨跌家数与腾讯一致 |
+| 申万一级行业估值 | `index_first_info_sw` | 申万 | OK，31 个行业，含 TTM PE/PB/股息率 |
+| 申万行业指数历史 | `index_hist_sw` | 申万 | OK，31 个行业各自日线 |
+| 东方财富快照 | `stock_zh_a_spot_em` | 东方财富 | **Push2RateLimitError（限频）**，未采用 |
+
+**结论**：东方财富限频不影响本项目——指数走新浪/中证/腾讯三源回退，市场快照走腾讯+新浪双源校验，行业走申万。
+

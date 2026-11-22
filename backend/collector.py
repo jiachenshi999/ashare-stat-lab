@@ -24,15 +24,39 @@ def _now_iso() -> str:
 
 
 def collect_one(index_key: str, meta: Dict) -> Dict:
-    """抓取并落地单个指数。返回记录条目。"""
+    """抓取并落地单个指数。返回记录条目。
+
+    数据不退化保护：若本次抓取行数明显少于已有 processed 数据（<95%），
+    视为数据源降级/异常，保留旧数据并告警，不用短序列覆盖完整历史。
+    """
     symbol = meta["symbol"]
+    config.ensure_dirs()
+    proc_path = os.path.join(config.PROCESSED_DIR, f"{index_key}.csv")
+
+    old_rows = 0
+    if os.path.exists(proc_path):
+        try:
+            old_rows = int(len(pd.read_csv(proc_path)))
+        except Exception:  # noqa: BLE001
+            old_rows = 0
+
     df_raw, source = fetch_index_daily(symbol)
     ndf = normalize_index(df_raw, source)
     issues = validate_ohlc(ndf)
+    new_rows = int(len(ndf))
 
-    config.ensure_dirs()
+    if old_rows and new_rows < int(old_rows * 0.95):
+        print(f"[KEEP] {meta['name']}({index_key}): 新抓取 {new_rows} 行 < 已有 {old_rows} 行，"
+              f"判定数据源降级（{source}），保留旧数据不覆盖。")
+        return {
+            "key": index_key, "name": meta["name"], "market": meta.get("market", ""),
+            "source_symbol": symbol, "source_interface": f"{source}(degraded, kept_old)",
+            "rows": old_rows, "first_date": None, "last_date": None,
+            "columns": list(ndf.columns), "quality_issues": issues + ["本次抓取行数偏少，已保留旧数据"],
+            "downloaded_at": _now_iso(), "kept_old": True,
+        }
+
     raw_path = os.path.join(config.RAW_DIR, f"{index_key}_{source}.csv")
-    proc_path = os.path.join(config.PROCESSED_DIR, f"{index_key}.csv")
     df_raw.to_csv(raw_path, index=False, encoding="utf-8-sig")
     ndf.to_csv(proc_path, index=False, encoding="utf-8-sig")
 
