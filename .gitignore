@@ -14,3 +14,5 @@ site/
 # 系统
 Thumbs.db
 .DS_Store
+
+data/backup/
