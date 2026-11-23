@@ -392,13 +392,26 @@ async function loadStage23() {
     } catch (e) { /* 单文件失败不影响其他 */ }
   }
 }
+let industryLoading = false;
+let industryLoadError = null;
 async function ensureIndustry(moduleName) {
-  if (INDUSTRY) return;
+  if (INDUSTRY || industryLoading) return;
+  industryLoading = true;
   try {
     const r = await fetch("data/industry.json");
-    if (r.ok) INDUSTRY = await r.json();
-  } catch (e) { /* ignore */ }
+    if (!r.ok) industryLoadError = "HTTP " + r.status;
+    else { INDUSTRY = await r.json(); industryLoadError = null; }
+  } catch (e) {
+    industryLoadError = e.message || "网络错误";
+  } finally {
+    industryLoading = false;
+  }
   if (activeModule === moduleName) renderAll();
+}
+function retryIndustry() {
+  INDUSTRY = null;
+  industryLoadError = null;
+  ensureIndustry("p2value");
 }
 
 // ---------------- 渲染入口 ----------------
@@ -526,6 +539,22 @@ function getChart(id) {
   const c = echarts.init(el);
   charts[id] = c;
   return c;
+}
+// 数据未就绪时，在图表区域显式写明原因，避免出现“白板空图”
+function chartNotice(id, text) {
+  const el = document.getElementById(id);
+  if (!el) return null;
+  if (charts[id]) { charts[id].dispose(); delete charts[id]; }
+  const c = echarts.init(el);
+  charts[id] = c;
+  c.setOption({
+    title: {
+      text, left: "center", top: "middle",
+      textStyle: { fontSize: 13, color: "#94a3b8", fontWeight: "normal" }
+    },
+    xAxis: { show: false }, yAxis: { show: false }, series: []
+  }, true);
+  return null;
 }
 function baseGrid() { return { left: 56, right: 24, top: 26, bottom: 48 }; }
 function baseTooltip() {
@@ -1458,6 +1487,7 @@ function renderP2Value() {
   c.innerHTML = `
     <div class="section-title">P2-8/9 估值、行业轮动与风格</div>
     <div class="module-intro">研究问题：市场/行业现在估值处于什么历史位置？价格来自盈利还是估值？哪些行业何时强弱、是否会同时下跌？<b>口径</b>：${VALUATION ? VALUATION.note : ""}</div>
+    ${p2DataBanner()}
     <div class="kpi-row">
       ${kpi(`${primaryVal ? primaryVal.name : "指数"} 最新 PE_TTM`, peNow === null ? "—" : fmt(peNow), "", primaryVal ? primaryVal.dates[primaryVal.dates.length - 1] : "")}
       ${kpi("PE 全历史分位", pePctAll === null ? "—" : fmtPct(pePctAll), pePctAll !== null && pePctAll >= 70 ? "down" : "", "越高代表越贵（相对自身历史）")}
@@ -1512,7 +1542,7 @@ function renderP2Value() {
   bindP2Focus();
 }
 function drawPE() {
-  if (!VALUATION) return;
+  if (!VALUATION) return chartNotice("p2-pe", "估值数据尚未加载完成，请稍候或刷新页面");
   const c = getChart("p2-pe");
   if (!c) return;
   const series = VALUATION.indices.map((it, i) => ({
@@ -1542,7 +1572,7 @@ function drawPE() {
   }, true);
 }
 function drawIndPE() {
-  if (!INDUSTRY) return;
+  if (!INDUSTRY) return chartNotice("p2-indpe", "行业数据尚未加载完成（industry.json 约 4.4MB），请稍候或点上方重试");
   const c = getChart("p2-indpe");
   if (!c) return;
   const list = focusFilter(INDUSTRY.industries.filter(x => isFinite(x.pe_ttm) && x.pe_ttm > 0))
@@ -1556,7 +1586,7 @@ function drawIndPE() {
   }, true);
 }
 function drawIndPB() {
-  if (!INDUSTRY) return;
+  if (!INDUSTRY) return chartNotice("p2-indpb", "行业数据尚未加载完成（industry.json 约 4.4MB），请稍候或点上方重试");
   const c = getChart("p2-indpb");
   if (!c) return;
   const list = focusFilter(INDUSTRY.industries.filter(x => isFinite(x.pb) && x.pb > 0)).sort((a, b) => a.pb - b.pb);
@@ -1579,7 +1609,7 @@ function industryYearly(close, dates) {
   return Object.keys(map).sort().map(y => ({ year: y, ret: (map[y].last / map[y].first - 1) * 100 }));
 }
 function drawIndYear() {
-  if (!INDUSTRY) return;
+  if (!INDUSTRY) return chartNotice("p2-indyear", "行业数据尚未加载完成（industry.json 约 4.4MB），请稍候或点上方重试");
   const c = getChart("p2-indyear");
   const inds = INDUSTRY.industries.filter(x => x.dates.length > 30);
   const years = [...new Set(inds.flatMap(x => industryYearly(x.close, x.dates).map(y => y.year)))].sort().slice(-12);
@@ -1603,7 +1633,7 @@ function drawIndYear() {
   }, true);
 }
 function drawIndRet() {
-  if (!INDUSTRY) return;
+  if (!INDUSTRY) return chartNotice("p2-indret", "行业数据尚未加载完成（industry.json 约 4.4MB），请稍候或点上方重试");
   const c = getChart("p2-indret");
   const rows = [];
   INDUSTRY.industries.forEach(it => {
@@ -1685,7 +1715,7 @@ function peBand(idx) {
   return { p20, p50, p80 };
 }
 function drawPePct() {
-  if (!VALUATION) return;
+  if (!VALUATION) return chartNotice("p2-pepct", "估值数据尚未加载完成，请稍候或刷新页面");
   const c = getChart("p2-pepct");
   if (!c) return;
   const names = [], s5 = [], s10 = [], sAll = [];
@@ -1712,8 +1742,18 @@ function drawPePct() {
 function focusFilter(list) {
   return p2Focus.size ? list.filter(x => p2Focus.has(x.name)) : list;
 }
+function p2DataBanner() {
+  if (INDUSTRY && VALUATION) return "";
+  if (industryLoadError) {
+    return `<div class="card" style="border-color:#f59e0b;background:#fffbeb"><b>行业数据加载失败：</b>${escapeHtml(industryLoadError)}　<button class="btn" id="p2-retry">重试</button>　也可运行 <code>python backend/stage23.py</code> 后刷新页面</div>`;
+  }
+  const parts = [];
+  if (!VALUATION) parts.push("指数估值序列");
+  if (!INDUSTRY) parts.push("申万行业序列（industry.json 约 4.4MB，首次加载需要几秒）");
+  return `<div class="card"><b>正在加载：</b>${parts.join("、")}。相关图区先显示占位说明，加载完成后自动重绘。</div>`;
+}
 function drawIndDiv() {
-  if (!INDUSTRY) return;
+  if (!INDUSTRY) return chartNotice("p2-inddiv", "行业数据尚未加载完成（industry.json 约 4.4MB），请稍候或点上方重试");
   const c = getChart("p2-inddiv");
   if (!c) return;
   const list = focusFilter(INDUSTRY.industries.filter(x => isFinite(x.div_yield) && x.div_yield > 0))
@@ -1728,7 +1768,7 @@ function drawIndDiv() {
   }, true);
 }
 function drawIndBox() {
-  if (!INDUSTRY) return;
+  if (!INDUSTRY) return chartNotice("p2-indbox", "行业数据尚未加载完成（industry.json 约 4.4MB），请稍候或点上方重试");
   const c = getChart("p2-indbox");
   if (!c) return;
   const pool = INDUSTRY.industries.filter(x => isFinite(x.pe_ttm) && x.pe_ttm > 0);
@@ -1768,7 +1808,7 @@ function yearReturnMap(dates, close) {
   return out;
 }
 function drawExcess() {
-  if (!INDUSTRY) return;
+  if (!INDUSTRY) return chartNotice("p2-excess", "行业数据尚未加载完成（industry.json 约 4.4MB），请稍候或点上方重试");
   const c = getChart("p2-excess");
   if (!c) return;
   const hs = dataMap["sh000300"];
@@ -1937,6 +1977,8 @@ function drawCorr() {
 function bindP2Focus() {
   const clear = $("#p2-fclear");
   if (clear) clear.onclick = () => { p2Focus = new Set(); renderAll(); };
+  const retry = $("#p2-retry");
+  if (retry) retry.onclick = () => { retryIndustry(); renderAll(); };
   $$("#p2-focus .p2-fbtn").forEach(btn => {
     btn.onclick = () => {
       const n = btn.dataset.name;
