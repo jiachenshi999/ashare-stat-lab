@@ -24,6 +24,7 @@ let EVENTS = null;          // 历史事件库（极端日原因）
 let MARKET = null;          // P1 最新截面（广度+规模）
 let LIQUIDITY = null;       // P1-7 指数成交额历史
 let VALUATION = null;       // P2-8 指数 PE 历史
+let TOTALRETURN = null;     // P2-8 沪深300全收益（分红再投资口径）
 let INDUSTRY = null;        // P2-9 申万行业
 
 const PALETTE = ["#2563eb", "#d64541", "#1a9e6c", "#7c3aed", "#b45309", "#0891b2", "#be185d", "#4d7c0f"];
@@ -380,6 +381,7 @@ async function loadStage23() {
     ["MARKET", "data/market_snapshot.json"],
     ["LIQUIDITY", "data/liquidity.json"],
     ["VALUATION", "data/valuation.json"],
+    ["TOTALRETURN", "data/total_return.json"],
   ];
   for (const [name, url] of files) {
     try {
@@ -389,6 +391,7 @@ async function loadStage23() {
       if (name === "MARKET") MARKET = j;
       else if (name === "LIQUIDITY") LIQUIDITY = j;
       else if (name === "VALUATION") VALUATION = j;
+      else if (name === "TOTALRETURN") TOTALRETURN = j;
     } catch (e) { /* 单文件失败不影响其他 */ }
   }
 }
@@ -1513,6 +1516,7 @@ function renderP2Value() {
     <div class="card" style="margin-top:14px"><h3>行业年度收益热力图</h3><div class="sub">每个行业每年的价格收益（%）</div><div id="p2-indyear" class="chart tall"></div></div>
     <div class="card" style="margin-top:14px"><h3>行业相对沪深300 的年度超额收益</h3><div class="sub">行业当年价格收益 − 沪深300 同年价格收益（百分点）；红色跑赢、绿色跑输</div><div id="p2-excess" class="chart tall"></div></div>
     <div class="card" style="margin-top:14px"><h3>主要指数累计收益（起点 = 100）</h3><div class="sub">沪深300 / 上证50 / 中证500 / 中证1000，统一从共同起点归一；价格为指数口径，不含分红</div><div id="p2-cumidx" class="chart tall"></div></div>
+    <div class="card" style="margin-top:14px"><h3>沪深300：价格收益 vs 全收益（分红再投资贡献）</h3><div class="sub">全收益指数 H00300 把样本股现金分红按除息日再投资；两条曲线统一从共同起点 = 100，差额即分红贡献。样本 ${TOTALRETURN ? `${TOTALRETURN.first_date} ~ ${TOTALRETURN.last_date}（N=${TOTALRETURN.n}）` : "数据未加载"}；全收益序列更新略滞后于价格指数</div><div id="p2-totret" class="chart tall"></div></div>
     <div class="grid cols-2" style="margin-top:14px">
       <div class="card"><h3>大小盘相对强弱（上证50 / 中证1000）</h3><div class="sub">比值上行=大盘风格占优；下行=小盘占优；起点归一为 1</div><div id="p2-style" class="chart"></div></div>
       <div class="card"><h3>行业与沪深300 的联动性</h3><div class="sub">31 个行业与沪深300 的滚动 60 日相关系数（行业平均）＋ 沪深300 滚动 250 日年化波动率</div><div id="p2-corr" class="chart"></div></div>
@@ -1523,7 +1527,7 @@ function renderP2Value() {
         <li><b>分板块估值箱线图（个股口径）：</b>现有数据只有全市场 PE/PB 中位数与行业当前值，没有个股估值历史分位，无法按板块计算，暂不绘制。</li>
         <li><b>行业估值历史分位：</b>申万行业只采集了当前 PE/PB/股息率与价格历史，缺少行业估值的历史序列，因此本页的行业估值只做截面比较，不做“历史分位”结论。</li>
         <li><b>盈利与估值分解：</b>需要可验证的历史盈利（EPS/ROE）序列，当前未采集，不做“涨了来自盈利还是估值”的定量拆解。</li>
-        <li><b>分红全收益指数：</b>未取得可信的全收益指数序列，因此所有累计收益均为价格口径，不含分红。</li>
+        <li><b>分红全收益指数（部分已补）：</b>已接入中证官方 <b>沪深300全收益指数 H00300</b>（2018-05 起），见上方「价格收益 vs 全收益」；上证50 / 中证500 / 中证1000 的全收益序列尚未接入，其余累计收益仍为价格口径、不含分红。</li>
       </ul>
       <div class="note misread" style="margin-top:12px"><b>边界：</b>指数 PE 为样本口径、滚动市盈率；行业分类以申万为准；未把个股最新 PE 拼成“历史主板 PE”；分位均为经验分位，不是未来概率。</div>
     </div>`;
@@ -1536,6 +1540,7 @@ function renderP2Value() {
   drawIndYear();
   drawExcess();
   drawIndexCum();
+  drawTotRet();
   drawStyle();
   drawCorr();
   drawIndRet();
@@ -1879,8 +1884,50 @@ function drawIndexCum() {
     series
   }, true);
 }
-function drawStyle() {
-  const c = getChart("p2-style");
+function drawTotRet() {
+  const c = getChart("p2-totret");
+  if (!c) return;
+  if (!TOTALRETURN || !Array.isArray(TOTALRETURN.dates)) return chartNotice("p2-totret", "全收益指数未加载：data/total_return.json（可运行 python backend/stage24_totret.py）");
+  const price = dataMap["sh000300"];
+  if (!price) return chartNotice("p2-totret", "沪深300 价格序列未加载，暂无法对比");
+  const trMap = new Map();
+  TOTALRETURN.dates.forEach((d, i) => trMap.set(d, TOTALRETURN.close[i]));
+  const pMap = new Map();
+  price.dates.forEach((d, i) => pMap.set(d, price.close[i]));
+  const start = TOTALRETURN.first_date > price.dates[0] ? TOTALRETURN.first_date : price.dates[0];
+  const dates = price.dates.filter(d => d >= start && trMap.has(d));
+  if (dates.length < 30) return chartNotice("p2-totret", "共同区间样本不足（少于 30 个交易日）");
+  const p0 = pMap.get(dates[0]), t0 = trMap.get(dates[0]);
+  const pSer = dates.map(d => [d, (pMap.get(d) / p0) * 100]);
+  const tSer = dates.map(d => [d, (trMap.get(d) / t0) * 100]);
+  const lastD = dates[dates.length - 1];
+  const gap = ((trMap.get(lastD) / t0) / (pMap.get(lastD) / p0) - 1) * 100;
+  c.setOption({
+    tooltip: {
+      trigger: "axis",
+      formatter: (ps) => {
+        if (!ps.length) return "";
+        const pv = ps.find(x => x.seriesName === "价格收益（不含分红）");
+        const tv = ps.find(x => x.seriesName === "全收益（分红再投资）");
+        const g = (pv && tv) ? (tv.value[1] / pv.value[1] - 1) * 100 : null;
+        return `${ps[0].value[0]}<br/>价格指数 ${pv ? fmt(pv.value[1], 1) : "—"}<br/>全收益 ${tv ? fmt(tv.value[1], 1) : "—"}` +
+          (g === null ? "" : `<br/>累计分红贡献 ${fmt(g, 2)}%`);
+      }
+    },
+    grid: baseGrid(), legend: { top: 0, type: "scroll" },
+    xAxis: { type: "time" }, yAxis: { type: "value", name: "累计净值（起点=100）", scale: true },
+    dataZoom: [{ type: "inside" }, { type: "slider", height: 16, bottom: 6 }],
+    title: {
+      right: 12, top: 4, textStyle: { fontSize: 12, color: "#b45309", fontWeight: "normal" },
+      text: `区间累计分红贡献 +${fmt(gap, 2)}%`
+    },
+    series: [
+      { type: "line", name: "价格收益（不含分红）", data: pSer, showSymbol: false, lineStyle: { width: 1.4, color: "#2563eb" } },
+      { type: "line", name: "全收益（分红再投资）", data: tSer, showSymbol: false, lineStyle: { width: 1.6, color: "#b45309" } }
+    ]
+  }, true);
+}
+function drawStyle() {  const c = getChart("p2-style");
   if (!c) return;
   const cs = commonSeries(["sh000016", "sh000852"]);
   if (!cs) {
