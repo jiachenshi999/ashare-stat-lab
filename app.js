@@ -392,13 +392,26 @@ async function loadStage23() {
     } catch (e) { /* 单文件失败不影响其他 */ }
   }
 }
+let industryLoading = false;
+let industryLoadError = null;
 async function ensureIndustry(moduleName) {
-  if (INDUSTRY) return;
+  if (INDUSTRY || industryLoading) return;
+  industryLoading = true;
   try {
     const r = await fetch("data/industry.json");
-    if (r.ok) INDUSTRY = await r.json();
-  } catch (e) { /* ignore */ }
+    if (!r.ok) industryLoadError = "HTTP " + r.status;
+    else { INDUSTRY = await r.json(); industryLoadError = null; }
+  } catch (e) {
+    industryLoadError = e.message || "网络错误";
+  } finally {
+    industryLoading = false;
+  }
   if (activeModule === moduleName) renderAll();
+}
+function retryIndustry() {
+  INDUSTRY = null;
+  industryLoadError = null;
+  ensureIndustry("p2value");
 }
 
 // ---------------- 渲染入口 ----------------
@@ -526,6 +539,22 @@ function getChart(id) {
   const c = echarts.init(el);
   charts[id] = c;
   return c;
+}
+// 数据未就绪时，在图表区域显式写明原因，避免出现“白板空图”
+function chartNotice(id, text) {
+  const el = document.getElementById(id);
+  if (!el) return null;
+  if (charts[id]) { charts[id].dispose(); delete charts[id]; }
+  const c = echarts.init(el);
+  charts[id] = c;
+  c.setOption({
+    title: {
+      text, left: "center", top: "middle",
+      textStyle: { fontSize: 13, color: "#94a3b8", fontWeight: "normal" }
+    },
+    xAxis: { show: false }, yAxis: { show: false }, series: []
+  }, true);
+  return null;
 }
 function baseGrid() { return { left: 56, right: 24, top: 26, bottom: 48 }; }
 function baseTooltip() {
@@ -1448,30 +1477,92 @@ function renderP2Value() {
     return;
   }
   if (!INDUSTRY) ensureIndustry("p2value");
+  ensureP2Indices();
+  const primaryVal = VALUATION ? (VALUATION.indices.find(x => x.key === currentKey) || VALUATION.indices[0]) : null;
+  const peNow = primaryVal ? lastPeValue(primaryVal) : null;
+  const pePctAll = primaryVal && peNow !== null ? pePercentile(primaryVal, peNow, "all") : null;
+  const pePct5 = primaryVal && peNow !== null ? pePercentile(primaryVal, peNow, "5y") : null;
+  const indMedPe = INDUSTRY ? medianOf(INDUSTRY.industries.map(x => x.pe_ttm).filter(v => isFinite(v) && v > 0)) : null;
+  const focusTxt = p2Focus.size ? `已筛选 ${p2Focus.size} 个重点行业（点击按钮取消）` : "点击按钮只看重点行业";
   c.innerHTML = `
     <div class="section-title">P2-8/9 估值、行业轮动与风格</div>
-    <div class="module-intro">研究问题：市场/行业现在估值处于什么历史位置？价格来自盈利还是估值？哪些行业何时强弱？<b>口径</b>：${VALUATION ? VALUATION.note : ""}</div>
-    <div class="card"><h3>指数滚动市盈率 PE_TTM 历史</h3><div class="sub">仅使用截至该日的已知数据；分位按全历史</div><div id="p2-pe" class="chart tall"></div></div>
+    <div class="module-intro">研究问题：市场/行业现在估值处于什么历史位置？价格来自盈利还是估值？哪些行业何时强弱、是否会同时下跌？<b>口径</b>：${VALUATION ? VALUATION.note : ""}</div>
+    ${p2DataBanner()}
+    <div class="kpi-row">
+      ${kpi(`${primaryVal ? primaryVal.name : "指数"} 最新 PE_TTM`, peNow === null ? "—" : fmt(peNow), "", primaryVal ? primaryVal.dates[primaryVal.dates.length - 1] : "")}
+      ${kpi("PE 全历史分位", pePctAll === null ? "—" : fmtPct(pePctAll), pePctAll !== null && pePctAll >= 70 ? "down" : "", "越高代表越贵（相对自身历史）")}
+      ${kpi("PE 近 5 年分位", pePct5 === null ? "—" : fmtPct(pePct5), "", "仅用截至该日的过去 5 年")}
+      ${kpi("申万一级行业 PE 中位数", indMedPe === null ? "—" : fmt(indMedPe), "", "31 个行业最新截面，剔除负 PE")}
+    </div>
+    <div class="card">
+      <h3>重点行业快捷筛选</h3>
+      <div class="sub">${focusTxt}；筛选同时作用于下方行业 PE / PB / 股息率三张截面图</div>
+      <div class="ctrl-row" id="p2-focus">${P2_FOCUS.map(n => `<button class="btn p2-fbtn ${p2Focus.has(n) ? "active" : ""}" data-name="${n}">${n}</button>`).join("")}
+        <button class="btn" id="p2-fclear">全部行业</button></div>
+    </div>
+    <div class="card" style="margin-top:14px"><h3>指数滚动市盈率 PE_TTM 历史（含 5 年滚动分位带）</h3><div class="sub">实线为各指数 PE_TTM；虚线带为该指数过去 5 年 PE 的 P20/P50/P80（月末采样，仅用当时已知历史）</div><div id="p2-pe" class="chart tall"></div></div>
+    <div class="card" style="margin-top:14px"><h3>当前 PE 处于历史什么位置（5 年 / 10 年 / 全历史分位）</h3><div class="sub">分位 = 截至最新交易日，当前 PE 在该窗口历史 PE 中的经验百分位；越高越贵</div><div id="p2-pepct" class="chart"></div></div>
     <div class="grid cols-2" style="margin-top:14px">
       <div class="card"><h3>申万一级行业当前 PE_TTM</h3><div class="sub">按 PE 从低到高排序；仅最新截面</div><div id="p2-indpe" class="chart tall"></div></div>
-      <div class="card"><h3>申万一级行业当前 PB / 股息率</h3><div id="p2-indpb" class="chart tall"></div></div>
+      <div class="card"><h3>申万一级行业当前 PB</h3><div class="sub">按 PB 从低到高排序；仅最新截面</div><div id="p2-indpb" class="chart tall"></div></div>
+    </div>
+    <div class="grid cols-2" style="margin-top:14px">
+      <div class="card"><h3>申万一级行业当前股息率</h3><div class="sub">按股息率从高到低排序；仅最新截面</div><div id="p2-inddiv" class="chart tall"></div></div>
+      <div class="card"><h3>31 个行业 PE 截面分布（箱线）</h3><div class="sub">箱体为四分位、须为 1.5 倍 IQR，点是离群行业；剔除负 PE</div><div id="p2-indbox" class="chart tall"></div></div>
     </div>
     <div class="card" style="margin-top:14px"><h3>行业年度收益热力图</h3><div class="sub">每个行业每年的价格收益（%）</div><div id="p2-indyear" class="chart tall"></div></div>
-    <div class="card" style="margin-top:14px"><h3>行业近 1 年累计收益排名</h3><div id="p2-indret" class="chart tall"></div></div>
-    <div class="note misread" style="margin-top:14px"><b>边界：</b>指数 PE 为样本口径、滚动市盈率；行业分类以申万为准；未把个股最新 PE 拼成“历史主板 PE”。</div>`;
+    <div class="card" style="margin-top:14px"><h3>行业相对沪深300 的年度超额收益</h3><div class="sub">行业当年价格收益 − 沪深300 同年价格收益（百分点）；红色跑赢、绿色跑输</div><div id="p2-excess" class="chart tall"></div></div>
+    <div class="card" style="margin-top:14px"><h3>主要指数累计收益（起点 = 100）</h3><div class="sub">沪深300 / 上证50 / 中证500 / 中证1000，统一从共同起点归一；价格为指数口径，不含分红</div><div id="p2-cumidx" class="chart tall"></div></div>
+    <div class="grid cols-2" style="margin-top:14px">
+      <div class="card"><h3>大小盘相对强弱（上证50 / 中证1000）</h3><div class="sub">比值上行=大盘风格占优；下行=小盘占优；起点归一为 1</div><div id="p2-style" class="chart"></div></div>
+      <div class="card"><h3>行业与沪深300 的联动性</h3><div class="sub">31 个行业与沪深300 的滚动 60 日相关系数（行业平均）＋ 沪深300 滚动 250 日年化波动率</div><div id="p2-corr" class="chart"></div></div>
+    </div>
+    <div class="card" style="margin-top:14px"><h3>行业近 1 年累计收益排名</h3><div class="sub">按最近 250 个交易日价格收益排序</div><div id="p2-indret" class="chart tall"></div></div>
+    <div class="card" style="margin-top:14px"><h3>数据不足、本页不画的部分（如实标注，不用假数据填充）</h3>
+      <ul class="sub" style="margin:6px 0 0 18px;line-height:1.9">
+        <li><b>分板块估值箱线图（个股口径）：</b>现有数据只有全市场 PE/PB 中位数与行业当前值，没有个股估值历史分位，无法按板块计算，暂不绘制。</li>
+        <li><b>行业估值历史分位：</b>申万行业只采集了当前 PE/PB/股息率与价格历史，缺少行业估值的历史序列，因此本页的行业估值只做截面比较，不做“历史分位”结论。</li>
+        <li><b>盈利与估值分解：</b>需要可验证的历史盈利（EPS/ROE）序列，当前未采集，不做“涨了来自盈利还是估值”的定量拆解。</li>
+        <li><b>分红全收益指数：</b>未取得可信的全收益指数序列，因此所有累计收益均为价格口径，不含分红。</li>
+      </ul>
+      <div class="note misread" style="margin-top:12px"><b>边界：</b>指数 PE 为样本口径、滚动市盈率；行业分类以申万为准；未把个股最新 PE 拼成“历史主板 PE”；分位均为经验分位，不是未来概率。</div>
+    </div>`;
   drawPE();
+  drawPePct();
   drawIndPE();
   drawIndPB();
+  drawIndDiv();
+  drawIndBox();
   drawIndYear();
+  drawExcess();
+  drawIndexCum();
+  drawStyle();
+  drawCorr();
   drawIndRet();
+  bindP2Focus();
 }
 function drawPE() {
-  if (!VALUATION) return;
+  if (!VALUATION) return chartNotice("p2-pe", "估值数据尚未加载完成，请稍候或刷新页面");
   const c = getChart("p2-pe");
+  if (!c) return;
   const series = VALUATION.indices.map((it, i) => ({
     type: "line", name: it.name, data: it.dates.map((d, j) => [d, it.pe_ttm[j]]),
     showSymbol: false, lineStyle: { width: 1.2, color: PALETTE[i % PALETTE.length] }
   }));
+  const primary = VALUATION.indices.find(x => x.key === currentKey) || VALUATION.indices[0];
+  if (primary) {
+    const band = peBand(primary);
+    const bandColor = "#94a3b8";
+    const mk = (name, data, dash) => ({
+      type: "line", name, data, showSymbol: false, connectNulls: true,
+      lineStyle: { width: 1, type: dash, color: bandColor }
+    });
+    series.push(
+      mk(`${primary.name} 5年P20`, band.p20, "dotted"),
+      mk(`${primary.name} 5年P50`, band.p50, "dashed"),
+      mk(`${primary.name} 5年P80`, band.p80, "dotted")
+    );
+  }
   c.setOption({
     tooltip: { trigger: "axis", formatter: (p) => `${p[0].value[0]}<br/>PE ${fmt(p[0].value[1])}` },
     grid: baseGrid(), legend: { top: 0, type: "scroll" },
@@ -1481,28 +1572,30 @@ function drawPE() {
   }, true);
 }
 function drawIndPE() {
-  if (!INDUSTRY) return;
+  if (!INDUSTRY) return chartNotice("p2-indpe", "行业数据尚未加载完成（industry.json 约 4.4MB），请稍候或点上方重试");
   const c = getChart("p2-indpe");
-  const list = INDUSTRY.industries.filter(x => isFinite(x.pe_ttm) && x.pe_ttm > 0)
+  if (!c) return;
+  const list = focusFilter(INDUSTRY.industries.filter(x => isFinite(x.pe_ttm) && x.pe_ttm > 0))
     .sort((a, b) => a.pe_ttm - b.pe_ttm);
   c.setOption({
     tooltip: { trigger: "axis" },
     grid: { left: 90, right: 24, top: 16, bottom: 40 },
     xAxis: { type: "value", name: "PE_TTM" },
     yAxis: { type: "category", data: list.map(x => x.name), axisLabel: { fontSize: 10 } },
-    series: [{ type: "bar", data: list.map(x => ({ value: x.pe_ttm, itemStyle: { color: "#6366f1" } })) }]
+    series: [{ type: "bar", data: list.map(x => ({ value: x.pe_ttm, itemStyle: { color: p2Focus.has(x.name) ? "#b45309" : "#6366f1" } })) }]
   }, true);
 }
 function drawIndPB() {
-  if (!INDUSTRY) return;
+  if (!INDUSTRY) return chartNotice("p2-indpb", "行业数据尚未加载完成（industry.json 约 4.4MB），请稍候或点上方重试");
   const c = getChart("p2-indpb");
-  const list = INDUSTRY.industries.filter(x => isFinite(x.pb) && x.pb > 0).sort((a, b) => a.pb - b.pb);
+  if (!c) return;
+  const list = focusFilter(INDUSTRY.industries.filter(x => isFinite(x.pb) && x.pb > 0)).sort((a, b) => a.pb - b.pb);
   c.setOption({
     tooltip: { trigger: "axis" },
     grid: { left: 90, right: 24, top: 16, bottom: 40 },
     xAxis: { type: "value", name: "PB" },
     yAxis: { type: "category", data: list.map(x => x.name), axisLabel: { fontSize: 10 } },
-    series: [{ type: "bar", data: list.map(x => ({ value: x.pb, itemStyle: { color: "#0891b2" } })) }]
+    series: [{ type: "bar", data: list.map(x => ({ value: x.pb, itemStyle: { color: p2Focus.has(x.name) ? "#b45309" : "#0891b2" } })) }]
   }, true);
 }
 function industryYearly(close, dates) {
@@ -1516,7 +1609,7 @@ function industryYearly(close, dates) {
   return Object.keys(map).sort().map(y => ({ year: y, ret: (map[y].last / map[y].first - 1) * 100 }));
 }
 function drawIndYear() {
-  if (!INDUSTRY) return;
+  if (!INDUSTRY) return chartNotice("p2-indyear", "行业数据尚未加载完成（industry.json 约 4.4MB），请稍候或点上方重试");
   const c = getChart("p2-indyear");
   const inds = INDUSTRY.industries.filter(x => x.dates.length > 30);
   const years = [...new Set(inds.flatMap(x => industryYearly(x.close, x.dates).map(y => y.year)))].sort().slice(-12);
@@ -1540,7 +1633,7 @@ function drawIndYear() {
   }, true);
 }
 function drawIndRet() {
-  if (!INDUSTRY) return;
+  if (!INDUSTRY) return chartNotice("p2-indret", "行业数据尚未加载完成（industry.json 约 4.4MB），请稍候或点上方重试");
   const c = getChart("p2-indret");
   const rows = [];
   INDUSTRY.industries.forEach(it => {
@@ -1560,6 +1653,339 @@ function drawIndRet() {
     yAxis: { type: "category", data: rows.map(r => r.name), axisLabel: { fontSize: 10 } },
     series: [{ type: "bar", data: rows.map(r => ({ value: r.ret, itemStyle: { color: r.ret >= 0 ? UP : DOWN } })) }]
   }, true);
+}
+
+// ---------------- P2 补全：估值分位、行业轮动、风格与相关性 ----------------
+const P2_FOCUS = ["银行", "非银金融", "有色金属", "石油石化", "基础化工", "纺织服饰", "食品饮料", "医药生物"];
+let p2Focus = new Set();
+let p2IndicesTried = false;
+const P2_CACHE = { corr: null, cumidx: null, style: null };
+
+async function ensureP2Indices() {
+  const need = ["sh000300", "sh000016", "sh000905", "sh000852"];
+  const missing = need.filter(k => !dataMap[k]);
+  if (!missing.length || p2IndicesTried) return;
+  p2IndicesTried = true;
+  await ensureLoaded(missing);
+  if (activeModule === "p2value") renderAll();
+}
+
+function lastPeValue(idx) {
+  const v = idx.pe_ttm;
+  for (let i = v.length - 1; i >= 0; i--) if (v[i] !== null && v[i] !== undefined && isFinite(v[i])) return v[i];
+  return null;
+}
+function peWindowValues(idx, win) {
+  const lastDate = idx.dates[idx.dates.length - 1];
+  let start = null;
+  if (win === "5y") start = shiftDate(lastDate, -5);
+  else if (win === "10y") start = shiftDate(lastDate, -10);
+  const out = [];
+  for (let i = 0; i < idx.dates.length; i++) {
+    if (start && idx.dates[i] < start) continue;
+    const v = idx.pe_ttm[i];
+    if (v !== null && v !== undefined && isFinite(v)) out.push(v);
+  }
+  return out;
+}
+function pePercentile(idx, value, win) {
+  const v = peWindowValues(idx, win);
+  if (!v.length || value === null) return null;
+  return mean(v.map(x => (x <= value ? 1 : 0))) * 100;
+}
+function peBand(idx) {
+  // 月末采样；每个采样点回看 5 年 PE 求 P20/P50/P80（只用当时已知历史）
+  const p20 = [], p50 = [], p80 = [];
+  const d = idx.dates, v = idx.pe_ttm;
+  for (let i = 0; i < d.length; i++) {
+    const isMonthEnd = i === d.length - 1 || d[i + 1].slice(0, 7) !== d[i].slice(0, 7);
+    if (!isMonthEnd) continue;
+    const winVals = [];
+    const from = shiftDate(d[i], -5);
+    for (let j = i; j >= 0 && d[j] >= from; j--) {
+      const x = v[j];
+      if (x !== null && x !== undefined && isFinite(x)) winVals.push(x);
+    }
+    if (winVals.length < 40) continue;
+    const s = sortedCopy(winVals);
+    p20.push([d[i], quantile(s, 20)]);
+    p50.push([d[i], quantile(s, 50)]);
+    p80.push([d[i], quantile(s, 80)]);
+  }
+  return { p20, p50, p80 };
+}
+function drawPePct() {
+  if (!VALUATION) return chartNotice("p2-pepct", "估值数据尚未加载完成，请稍候或刷新页面");
+  const c = getChart("p2-pepct");
+  if (!c) return;
+  const names = [], s5 = [], s10 = [], sAll = [];
+  for (const it of VALUATION.indices) {
+    const now = lastPeValue(it);
+    names.push(it.name);
+    s5.push(now === null ? null : pePercentile(it, now, "5y"));
+    s10.push(now === null ? null : pePercentile(it, now, "10y"));
+    sAll.push(now === null ? null : pePercentile(it, now, "all"));
+  }
+  c.setOption({
+    tooltip: { trigger: "axis", valueFormatter: (x) => (x === null || x === undefined ? "—" : fmt(x) + "%") },
+    grid: { left: 56, right: 24, top: 34, bottom: 40 },
+    legend: { top: 0 },
+    xAxis: { type: "category", data: names, axisLabel: { fontSize: 11 } },
+    yAxis: { type: "value", name: "历史分位 (%)", min: 0, max: 100 },
+    series: [
+      { type: "bar", name: "近 5 年分位", data: s5, itemStyle: { color: "#2563eb" } },
+      { type: "bar", name: "近 10 年分位", data: s10, itemStyle: { color: "#7c3aed" } },
+      { type: "bar", name: "全历史分位", data: sAll, itemStyle: { color: "#b45309" } }
+    ]
+  }, true);
+}
+function focusFilter(list) {
+  return p2Focus.size ? list.filter(x => p2Focus.has(x.name)) : list;
+}
+function p2DataBanner() {
+  if (INDUSTRY && VALUATION) return "";
+  if (industryLoadError) {
+    return `<div class="card" style="border-color:#f59e0b;background:#fffbeb"><b>行业数据加载失败：</b>${escapeHtml(industryLoadError)}　<button class="btn" id="p2-retry">重试</button>　也可运行 <code>python backend/stage23.py</code> 后刷新页面</div>`;
+  }
+  const parts = [];
+  if (!VALUATION) parts.push("指数估值序列");
+  if (!INDUSTRY) parts.push("申万行业序列（industry.json 约 4.4MB，首次加载需要几秒）");
+  return `<div class="card"><b>正在加载：</b>${parts.join("、")}。相关图区先显示占位说明，加载完成后自动重绘。</div>`;
+}
+function drawIndDiv() {
+  if (!INDUSTRY) return chartNotice("p2-inddiv", "行业数据尚未加载完成（industry.json 约 4.4MB），请稍候或点上方重试");
+  const c = getChart("p2-inddiv");
+  if (!c) return;
+  const list = focusFilter(INDUSTRY.industries.filter(x => isFinite(x.div_yield) && x.div_yield > 0))
+    .sort((a, b) => b.div_yield - a.div_yield);
+  const hi = list.map(x => x.div_yield);
+  c.setOption({
+    tooltip: { trigger: "axis", valueFormatter: (v) => fmt(v) + "%" },
+    grid: { left: 90, right: 24, top: 16, bottom: 40 },
+    xAxis: { type: "value", name: "股息率 (%)" },
+    yAxis: { type: "category", data: list.map(x => x.name), axisLabel: { fontSize: 10 } },
+    series: [{ type: "bar", data: list.map((x, i) => ({ value: hi[i], itemStyle: { color: p2Focus.has(x.name) ? "#b45309" : "#0f766e" } })) }]
+  }, true);
+}
+function drawIndBox() {
+  if (!INDUSTRY) return chartNotice("p2-indbox", "行业数据尚未加载完成（industry.json 约 4.4MB），请稍候或点上方重试");
+  const c = getChart("p2-indbox");
+  if (!c) return;
+  const pool = INDUSTRY.industries.filter(x => isFinite(x.pe_ttm) && x.pe_ttm > 0);
+  const vals = pool.map(x => x.pe_ttm);
+  if (vals.length < 4) { c.setOption({ title: { text: "样本不足，无法绘制箱线", left: "center", top: "middle", textStyle: { fontSize: 13, color: "#94a3b8" } } }, true); return; }
+  const s = sortedCopy(vals);
+  const q1 = quantile(s, 25), med = quantile(s, 50), q3 = quantile(s, 75);
+  const iqr = q3 - q1;
+  const lo = Math.min(...s.filter(v => v >= q1 - 1.5 * iqr));
+  const hi = Math.max(...s.filter(v => v <= q3 + 1.5 * iqr));
+  const outliers = pool.filter(x => x.pe_ttm < lo || x.pe_ttm > hi)
+    .map(x => ({ name: x.name, value: x.pe_ttm }));
+  c.setOption({
+    tooltip: { trigger: "item" },
+    grid: { left: 56, right: 90, top: 30, bottom: 34 },
+    xAxis: { type: "category", data: ["申万31行业 PE_TTM"], axisLabel: { fontSize: 11 } },
+    yAxis: { type: "value", name: "PE_TTM", scale: true },
+    series: [
+      { type: "boxplot", data: [[lo, q1, med, q3, hi]], boxWidth: 60, itemStyle: { color: "#e0e7ff", borderColor: "#4f46e5" } },
+      {
+        type: "scatter", data: outliers.map(o => [0, o.value]), symbolSize: 7,
+        itemStyle: { color: "#b45309" },
+        label: { show: true, formatter: (p) => outliers[p.dataIndex].name, position: "right", fontSize: 10 }
+      }
+    ]
+  }, true);
+}
+function yearReturnMap(dates, close) {
+  const m = {};
+  for (let i = 0; i < dates.length; i++) {
+    const y = dates[i].slice(0, 4);
+    if (!m[y]) m[y] = { first: close[i], last: close[i] };
+    else m[y].last = close[i];
+  }
+  const out = {};
+  for (const y of Object.keys(m)) out[y] = (m[y].last / m[y].first - 1) * 100;
+  return out;
+}
+function drawExcess() {
+  if (!INDUSTRY) return chartNotice("p2-excess", "行业数据尚未加载完成（industry.json 约 4.4MB），请稍候或点上方重试");
+  const c = getChart("p2-excess");
+  if (!c) return;
+  const hs = dataMap["sh000300"];
+  if (!hs) {
+    c.setOption({ title: { text: "沪深300 统计序列未加载，暂不计算超额收益", left: "center", top: "middle", textStyle: { fontSize: 13, color: "#94a3b8" } } }, true);
+    return;
+  }
+  const hsYear = yearReturnMap(hs.dates, hs.close);
+  const inds = focusFilter(INDUSTRY.industries.filter(x => x.dates.length > 60));
+  const years = [...new Set(inds.flatMap(x => Object.keys(yearReturnMap(x.dates, x.close))))]
+    .filter(y => hsYear[y] !== undefined).sort().slice(-12);
+  const data = [];
+  let vmax = 0;
+  inds.forEach((it, yi) => {
+    const ym = yearReturnMap(it.dates, it.close);
+    years.forEach((y, xi) => {
+      if (ym[y] === undefined) return;
+      const ex = ym[y] - hsYear[y];
+      data.push([xi, yi, ex]);
+      vmax = Math.max(vmax, Math.abs(ex));
+    });
+  });
+  c.setOption({
+    tooltip: { formatter: (p) => `${inds[p.value[1]].name} ${years[p.value[0]]}<br/>超额 ${fmt(p.value[2], 1)} 个百分点` },
+    grid: { left: 90, right: 24, top: 16, bottom: 40 },
+    xAxis: { type: "category", data: years, axisLabel: { fontSize: 10 } },
+    yAxis: { type: "category", data: inds.map(x => x.name), axisLabel: { fontSize: 10 } },
+    visualMap: { min: -vmax, max: vmax, calculable: true, orient: "horizontal", left: "center", bottom: 0, inRange: { color: ["#1a9e6c", "#ffffff", "#d64541"] }, textStyle: { fontSize: 10 } },
+    dataZoom: [{ type: "inside", yAxisIndex: 0 }],
+    series: [{ type: "heatmap", data, emphasis: { itemStyle: { shadowBlur: 6 } } }]
+  }, true);
+}
+function commonSeries(keys) {
+  const series = keys.map(k => dataMap[k]).filter(Boolean);
+  if (series.length < 2) return null;
+  const starts = series.map(s => s.dates[0]).sort();
+  const start = starts[starts.length - 1];
+  const maps = series.map(s => {
+    const m = new Map();
+    for (let i = 0; i < s.dates.length; i++) m.set(s.dates[i], s.close[i]);
+    return m;
+  });
+  const dates = series[0].dates.filter(d => d >= start && maps.every(m => m.has(d)));
+  return { dates, maps, names: series.map(s => s.name), raw: series };
+}
+function drawIndexCum() {
+  const c = getChart("p2-cumidx");
+  if (!c) return;
+  const keys = ["sh000300", "sh000016", "sh000905", "sh000852"];
+  const cs = commonSeries(keys);
+  if (!cs) {
+    c.setOption({ title: { text: "指数统计序列未加载", left: "center", top: "middle", textStyle: { fontSize: 13, color: "#94a3b8" } } }, true);
+    return;
+  }
+  const series = cs.maps.map((m, i) => {
+    const base = m.get(cs.dates[0]);
+    return {
+      type: "line", name: cs.names[i], showSymbol: false,
+      data: cs.dates.map(d => [d, (m.get(d) / base) * 100]),
+      lineStyle: { width: 1.4, color: PALETTE[i % PALETTE.length] }
+    };
+  });
+  c.setOption({
+    tooltip: { trigger: "axis" },
+    grid: baseGrid(), legend: { top: 0, type: "scroll" },
+    xAxis: { type: "time" }, yAxis: { type: "value", name: "累计净值（起点=100）", scale: true },
+    dataZoom: [{ type: "inside" }, { type: "slider", height: 16, bottom: 6 }],
+    series
+  }, true);
+}
+function drawStyle() {
+  const c = getChart("p2-style");
+  if (!c) return;
+  const cs = commonSeries(["sh000016", "sh000852"]);
+  if (!cs) {
+    c.setOption({ title: { text: "上证50 / 中证1000 序列未加载", left: "center", top: "middle", textStyle: { fontSize: 13, color: "#94a3b8" } } }, true);
+    return;
+  }
+  const [big, small] = cs.maps;
+  const base = big.get(cs.dates[0]) / small.get(cs.dates[0]);
+  const pts = cs.dates.map(d => [d, (big.get(d) / small.get(d)) / base]);
+  c.setOption({
+    tooltip: { trigger: "axis", valueFormatter: (v) => fmt(v, 3) },
+    grid: baseGrid(),
+    xAxis: { type: "time" },
+    yAxis: { type: "value", name: "相对强弱（起点=1）", scale: true },
+    dataZoom: [{ type: "inside" }],
+    series: [{ type: "line", name: "上证50 / 中证1000", data: pts, showSymbol: false, lineStyle: { width: 1.5, color: "#7c3aed" }, areaStyle: { opacity: 0.06 } }]
+  }, true);
+}
+function pearson(pairs) {
+  const n = pairs.length;
+  if (n < 3) return NaN;
+  let sx = 0, sy = 0;
+  for (const [a, b] of pairs) { sx += a; sy += b; }
+  const mx = sx / n, my = sy / n;
+  let sxy = 0, sxx = 0, syy = 0;
+  for (const [a, b] of pairs) { const dx = a - mx, dy = b - my; sxy += dx * dy; sxx += dx * dx; syy += dy * dy; }
+  if (sxx <= 0 || syy <= 0) return NaN;
+  return sxy / Math.sqrt(sxx * syy);
+}
+function corrSeries() {
+  if (P2_CACHE.corr) return P2_CACHE.corr;
+  const hs = dataMap["sh000300"];
+  if (!hs || !INDUSTRY) return null;
+  const hsRet = new Map();
+  hs.returns_dates.forEach((d, i) => hsRet.set(d, hs.returns_pct[i]));
+  const indRets = INDUSTRY.industries.map(it => {
+    const m = new Map();
+    for (let i = 1; i < it.close.length; i++) m.set(it.dates[i], (it.close[i] / it.close[i - 1] - 1) * 100);
+    return m;
+  }).filter(m => m.size > 120);
+  const dates = hs.returns_dates;
+  const samples = [];
+  for (let i = 0; i < dates.length; i++) {
+    if (i === dates.length - 1 || dates[i + 1].slice(0, 7) !== dates[i].slice(0, 7)) samples.push(i);
+  }
+  const corr = [], vol = [];
+  const win = 60;
+  for (const i of samples) {
+    if (i + 1 < win) continue;
+    const ref = dates.slice(i - win + 1, i + 1);
+    const cs = [];
+    for (const m of indRets) {
+      const pairs = [];
+      for (const d of ref) {
+        const a = m.get(d), b = hsRet.get(d);
+        if (a !== undefined && b !== undefined) pairs.push([a, b]);
+      }
+      if (pairs.length >= win * 0.6) {
+        const r = pearson(pairs);
+        if (isFinite(r)) cs.push(r);
+      }
+    }
+    corr.push([dates[i], cs.length ? mean(cs) : null]);
+    const w250 = dates.slice(Math.max(0, i - 249), i + 1).map(d => hsRet.get(d)).filter(v => v !== undefined);
+    vol.push([dates[i], w250.length > 60 ? sampleStd(w250) * Math.sqrt(252) : null]);
+  }
+  P2_CACHE.corr = { corr, vol };
+  return P2_CACHE.corr;
+}
+function drawCorr() {
+  const c = getChart("p2-corr");
+  if (!c) return;
+  const r = corrSeries();
+  if (!r || !r.corr.length) {
+    c.setOption({ title: { text: "相关性所需序列（行业收益 + 沪深300）未就绪", left: "center", top: "middle", textStyle: { fontSize: 13, color: "#94a3b8" } } }, true);
+    return;
+  }
+  c.setOption({
+    tooltip: { trigger: "axis" },
+    grid: { left: 56, right: 56, top: 34, bottom: 44 },
+    legend: { top: 0 },
+    xAxis: { type: "time" },
+    yAxis: [
+      { type: "value", name: "相关系数", min: -0.2, max: 1, axisLabel: { formatter: (v) => fmt(v, 1) } },
+      { type: "value", name: "年化波动率 (%)", axisLabel: { formatter: (v) => fmt(v, 0) + "%" } }
+    ],
+    dataZoom: [{ type: "inside" }],
+    series: [
+      { type: "line", name: "行业平均相关系数(60日)", yAxisIndex: 0, data: r.corr, showSymbol: false, lineStyle: { width: 1.4, color: "#2563eb" } },
+      { type: "line", name: "沪深300 年化波动率(250日)", yAxisIndex: 1, data: r.vol, showSymbol: false, lineStyle: { width: 1.2, color: "#b45309" } }
+    ]
+  }, true);
+}
+function bindP2Focus() {
+  const clear = $("#p2-fclear");
+  if (clear) clear.onclick = () => { p2Focus = new Set(); renderAll(); };
+  const retry = $("#p2-retry");
+  if (retry) retry.onclick = () => { retryIndustry(); renderAll(); };
+  $$("#p2-focus .p2-fbtn").forEach(btn => {
+    btn.onclick = () => {
+      const n = btn.dataset.name;
+      if (p2Focus.has(n)) p2Focus.delete(n); else p2Focus.add(n);
+      renderAll();
+    };
+  });
 }
 
 function renderStatus() {
